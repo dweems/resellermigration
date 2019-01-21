@@ -38,6 +38,9 @@ class Reseller:
         self.password = password
         self.ticket_id = ticket_id
 
+        #create array to store generated backups with account info
+        self.reseller_facts = []
+
         #get environment stuff to save time
         self.env_user = os.environ['USER']
 
@@ -172,15 +175,15 @@ class Reseller:
             inodes_used = json.loads(self.driver.find_elements_by_tag_name('pre')[0].text)
 
             #create dict for total output
-            output = {
+            facts = {
                 "user": account['user'],
                 "domain": vhost_info['data'][0]['vhost'],
-                "inode_usage:": inodes_used['data']['inodes_used'],
+                "inode_usage": inodes_used['data']['inodes_used'],
                 "php_version": vhost_info['data'][0]['version']
             }
 
-            #print the data for ticket documentation purposes
-            print(output)
+            #add facts to reseller_facts array
+            self.reseller_facts.append(facts)
 
     def download_wait(self, path_to_downloads):
         dl_wait = True
@@ -206,6 +209,10 @@ if __name__ == "__main__":
     #begin
     print("Generating server backups..")
     reseller = Reseller(hostname, username, password, ticket_id)
+
+    #output reseller facts that were gathered during migrations
+    for fact in reseller.reseller_facts:
+        print(fact)
 
     #output master backup path
     print("##########################################")
