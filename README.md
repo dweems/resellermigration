@@ -6,6 +6,7 @@ Reseller Automated migration tool is a tool to migrate sites/accounts hosted on 
 ##
 ### Requirements: ###
 1) selenium
+2) chromedriver
 
 ##
 ### Usage: ###
