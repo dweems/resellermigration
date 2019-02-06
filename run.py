@@ -18,208 +18,141 @@
 # You should have received a copy of the GNU General Public License
 # along with Reseller Automated Migration Tool.  If not, see <http://www.gnu.org/licenses/>.
 
-###########################################
-## usage: python run.py
-## requirements: chromedriver, selenium
-###########################################
-
-from selenium import webdriver
-from selenium.webdriver import ActionChains
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.keys import Keys
-import multiprocessing as mp
-import json, time, os, random, getpass
+import json, time, os, random, getpass, urllib.parse, urllib.request, datetime
+import http.cookiejar as cookielib
 
 class Reseller:
     def __init__(self, hostname, username, password, ticket_id):
-        self.hostname_port = '{}:2082'.format(hostname)
+        self.hostname_port = '{}:2083'.format(hostname)
         self.hostname = hostname
         self.username = username
         self.password = password
         self.ticket_id = ticket_id
 
-        #create array to store generated backups with account info
-        self.reseller_facts = []
-
-        #get environment stuff to save time
+        # get environment stuff to save time
         self.env_user = os.environ['USER']
 
-        #setup working directory for backup locations
+        # setup working directory for backup locations
+        if not os.path.exists("/home/{}/automigrations/".format(self.env_user)):
+            os.mkdir("/home/{}/automigrations/".format(self.env_user))
+
         self.working_directory = '/home/{}/automigrations/{}/'.format(self.env_user, self.ticket_id)
         if not os.path.exists(self.working_directory):
             os.mkdir(self.working_directory)
 
-        #Set chromedriver options
-        chrome_options = webdriver.ChromeOptions() 
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument('download.default_directory={}'.format(self.working_directory))
-        chrome_options.add_argument('download.prompt_for_download=False')
-        chrome_options.add_argument('download.directory_upgrade=True')
-        chrome_options.add_argument('safebrowsing.disable_download_protection=True')
-
-        chrome_webdriver_bin = os.popen("which chromedriver").read()[:-1]
-
-        #initialize the webdriver
-        self.driver = webdriver.Chrome(executable_path=os.path.abspath(chrome_webdriver_bin), options=chrome_options) 
-
-        #begin migration
-        self.generate_backups()
-
-        #wait for all backups to finish downloading
-        self.download_wait(self.working_directory)
-
-        #when everything is done, close the driver
-        self.driver.close()
-
-    def get_accounts(self):
-        #load login page and login
-        self.driver.get("http://{}".format(self.hostname_port))
-
-        #log into account
-        login = self.driver.find_element_by_name("user")
-        login.clear()
-        login.send_keys(self.username)
-        login = self.driver.find_element_by_name("pass")
-        login.clear()
-        login.send_keys(self.password)
-        login.send_keys(Keys.RETURN)
-
-        #can be slow to load so we just wait a few seconds(you'll see this periodically - same thing)
-        time.sleep(3)
-
-        #need to get the sesion ID for /every/ session 
-        session_id = self.driver.current_url.split("/")[3]
-
-        self.driver.get("http://{}/{}/execute/Resellers/list_accounts".format(self.hostname_port, session_id))
-
-        #return json formatted user list
-        return json.loads(self.driver.find_elements_by_tag_name('pre')[0].text)
-
-    def generate_backups(self):
-        #iterate over all accounts and generate and download backup
-        for account in self.get_accounts()['data']:
-            print("Logging into {}'s cPanel account...".format(account['user']))
-            self.driver.get("http://{}".format(self.hostname_port))
-
-            #login to each resold account
-            login = self.driver.find_element_by_name("user")
-            login.clear()
-            login.send_keys(account['user'])
-            login = self.driver.find_element_by_name("pass")
-            login.clear()
-            login.send_keys(self.password)
-            login.send_keys(Keys.RETURN)
-            time.sleep(3)
-
-            session_id = self.driver.current_url.split("/")[3]
-
-            self.driver.get("http://{}/{}/frontend/paper_lantern/backup/wizard-fullbackup.html".format(self.hostname_port, session_id))
-
-            #get list of backups
-            backup_list = self.driver.find_element_by_id("backupList")
-            backups = backup_list.find_elements_by_tag_name("li")
-            newest_backup = ""
-
-            #make sure there are backups
-            if len(backups) > 0:
-                newest_backup = backups[len(backups)-1].text.split(" ")[0]
-
-            #disable the send email on completion email
-            backup = self.driver.find_element_by_id("email_radio_disabled").click()
-            backup = self.driver.find_element_by_id("backup_submit").click()
-            time.sleep(2)
-            backup = self.driver.find_element_by_id("lnkReturn").click()
-
-            print("Generating backup for {}".format(account['user']))
-
-            #get updated backup list
-            backup_list = self.driver.find_element_by_id("backupList")
-            backups = backup_list.find_elements_by_tag_name("li")
-
-            #wait for the backup to complete
-            while "inprogress" in backups[len(backups)-1].text:
-                time.sleep(4)
-                self.driver.refresh()
-                time.sleep(1)
-                backup_list = self.driver.find_element_by_id("backupList")
-                backups = backup_list.find_elements_by_tag_name("li")
-
-            #update newest_backup
-            if newest_backup is not backups[len(backups)-1].text.split(" ")[0]:
-                newest_backup = backups[len(backups)-1].text.split(" ")[0]
-            else:
-                newest_backup = backups[len(backups)-1].text.split(" ")[0]
-
-            print("Backup complete: {}".format(newest_backup))
-            
-            time.sleep(2)
-
-            #workaround for downloads in headless mode
-            self.driver.command_executor._commands["send_command"] = ("POST", '/session/$sessionId/chromium/send_command')
-
-            params = {'cmd': 'Page.setDownloadBehavior', 'params': {'behavior': 'allow', 'downloadPath': self.working_directory}}
-            command_result = self.driver.execute("send_command", params)
-
-            #download backup to self.working_directory
-            download_backup = self.driver.find_element_by_partial_link_text(newest_backup)
-            download_backup.click()
-
-            print("Downloading backup to local directory: {}".format(self.working_directory))
-
-            #get PHP info
-            self.driver.get("http://{}/{}/execute/LangPHP/php_get_vhost_versions".format(self.hostname_port, session_id))
-            vhost_info = json.loads(self.driver.find_elements_by_tag_name('pre')[0].text)
-
-            #get inode usage
-            self.driver.get("http://{}/{}/execute/Quota/get_quota_info".format(self.hostname_port, session_id))
-            inodes_used = json.loads(self.driver.find_elements_by_tag_name('pre')[0].text)
-
-            #create dict for total output
-            facts = {
-                "user": account['user'],
-                "domain": vhost_info['data'][0]['vhost'],
-                "inode_usage": inodes_used['data']['inodes_used'],
-                "php_version": vhost_info['data'][0]['version']
+        # set dict for login data that'll be passed to urllib
+        self.login_data = {
+            'user': self.username,
+            'pass': self.password,
             }
 
-            #add facts to reseller_facts array
-            self.reseller_facts.append(facts)
+        # initialize cookielib
+        self.cj = cookielib.CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj))
+        self.data = urllib.parse.urlencode(self.login_data)
 
-    def download_wait(self, path_to_downloads):
-        dl_wait = True
-        while dl_wait:
-            time.sleep(1)
-            dl_wait = False
-            for fname in os.listdir(path_to_downloads):
-                if fname.endswith('.crdownload'):
-                    print("Waiting for download to complete...")
-                    dl_wait = True
-            print("Downloads complete!")
+        # grab cpanel session id and then grab account list
+        self.session_id = self.get_session()
+        self.accounts = self.get_accounts()
+
+        # create array for backup files
+        self.backup_files = []
+
+        # generate and download each backup
+        self.get_backups()
+
+    # easier way to get the url n junk
+    def get_url(self, url):
+        return self.opener.open(url, self.data.encode('utf-8')).read().decode('utf-8')
+
+    def get_session(self):
+        url = 'https://{}/login/?login_only=1'.format(self.hostname_port)
+        res = self.get_url(url)
+        
+        return json.loads(res)['security_token']
+
+    # luckily most of this is json, so grab the dict and return
+    def get_accounts(self):
+        url = 'https://{}{}/execute/Resellers/list_accounts'.format(self.hostname_port, self.session_id)
+        res = json.loads(self.get_url(url))
+        accounts = []
+        for u in res['data']:
+            accounts.append(u['user'])
+        return accounts
+
+    def get_backups(self):
+        # iterate over each user, generate a backup, wait for it to complete, and download it
+        for user in self.accounts:
+            cj = cookielib.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+            login_data = urllib.parse.urlencode({'user' : user, 'pass' : self.password})
+            resp = opener.open('https://{}/login/?login_only=1'.format(self.hostname_port), login_data.encode('utf-8'))
+            session_id = json.loads(resp.read().decode('utf-8'))['security_token']
+
+            # generate the backup
+            opener.open('https://{}{}/frontend/paper_lantern/backup/wizard-dofullbackup.html'.format(self.hostname_port, session_id))
+
+            # grab a list of all backups
+            html = opener.open('https://{}{}/execute/Fileman/list_files?&types=file%7Cfile&include_mime=1&raw_mime_types=application/x-gzip'.format(self.hostname_port, session_id))
+
+            backups = json.loads(html.read().decode('utf-8'))['data']
+
+            file_list = []
+
+            for backup in backups:
+                file_list.append(backup['file'])
+
+            # make sure it's a backup from today and this user
+            if 'backup-{}.{}.{}_'.format(datetime.datetime.now().month, datetime.datetime.now().day, datetime.datetime.now().year) in file_list[-1] and '{}.tar.gz'.format(user) in file_list[-1]:
+                check_inprog_bk = opener.open("https://{}{}/frontend/paper_lantern/backup/wizard-fullbackup.html".format(self.hostname_port, session_id))
+
+                # make sure it's not still generating!
+                while "inprogress" in check_inprog_bk.read().decode('utf-8'):
+                    time.sleep(10)
+                    check_inprog_bk = opener.open("https://{}{}/frontend/paper_lantern/backup/wizard-fullbackup.html".format(self.hostname_port, session_id))
+
+                download_backup = opener.open("https://{}{}/download?file={}".format(self.hostname_port, session_id, file_list[-1]))
+
+                # and finally download the backup!
+                with open("{}{}".format(self.working_directory, file_list[-1]), 'wb') as output:
+                    output.write(download_backup.read())
+
+            # add the backup file to the list of total backup files
+            self.backup_files.append("{}{}".format(self.working_directory, backup['file']))
+
+            # gather facts
+            vhost_info = json.loads(opener.open("https://{}{}/execute/LangPHP/php_get_vhost_versions".format(self.hostname_port, session_id)).read().decode('utf-8'))
+            domain = vhost_info['data'][0]['vhost']
+            php_version = vhost_info['data'][0]['version']
+
+            inode_usage = json.loads(opener.open("https://{}{}/execute/Quota/get_quota_info".format(self.hostname_port, session_id)).read().decode('utf-8'))['data']['inodes_used']
+            
+            facts = {
+                "username": user,
+                "domain": domain,
+                "php_version": php_version,
+                "inode_usage": inode_usage,
+            }
+
+            print(facts)
 
 if __name__ == "__main__":
     # gather reseller information
-    print("Please provide the reseller server's hostname or IP: ", end='')
-    hostname = input()
-    print("Please provide the reseller username: ", end='')
-    username = input()
+    hostname = input("Please provide the reseller server's hostname or IP: ")
+    username = input("Please provide the reseller username: ")
     password = getpass.getpass("Please provide the reseller server's password: ")
-    print("Please provide the ticket number: ", end='')
-    ticket_id = input()
+    ticket_id = input("Please provide the ticket number: ")
 
     #begin
-    print("Generating server backups..")
+    print("\nGenerating server backups..")
+    print("##########################################")
+    print("#    Facts gathered during retrieval     #")
+    print("##########################################")
     reseller = Reseller(hostname, username, password, ticket_id)
 
-    #output reseller facts that were gathered during migrations
-    for fact in reseller.reseller_facts:
-        print(fact)
-
-    #output master backup path
-    print("##########################################")
-    print("# path to the the master account backup  #")
-    os.system("echo \"{}$(ls {} | grep {})\"".format(reseller.working_directory, reseller.working_directory, reseller.username))
-
-    #output each backup location for easy copy/paste for re-importing
+     #output each backup location for easy copy/paste for re-importing
     print("##########################################")
     print("# path to each backup file for importing #")
-    os.system("for i in $(ls {}); do echo {}$i; done | grep -v {}".format(reseller.working_directory, reseller.working_directory, reseller.username))
+    for file in reseller.backup_files:
+        print(file)
+    print("##########################################")
