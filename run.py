@@ -18,7 +18,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Reseller Automated Migration Tool.  If not, see <http://www.gnu.org/licenses/>.
 
-import json, time, os, random, getpass, urllib.parse, urllib.request, datetime
+import json, time, os, random, getpass, urllib.parse, urllib.request, datetime, sys
 import http.cookiejar as cookielib
 
 class Reseller:
@@ -52,8 +52,13 @@ class Reseller:
         self.data = urllib.parse.urlencode(self.login_data)
 
         # grab cpanel session id and then grab account list
-        self.session_id = self.get_session()
-        self.accounts = self.get_accounts()
+        try:
+            self.session_id = self.get_session()
+            self.accounts = self.get_accounts()
+            
+        except urllib.error.URLError:
+            print("Invalid hostname or login credential")
+            sys.exit(1)
 
         # create array for backup files
         self.backup_files = []
@@ -103,7 +108,7 @@ class Reseller:
                 file_list.append(backup['file'])
 
             # make sure it's a backup from today and this user
-            if 'backup-{}.{}.{}_'.format(datetime.datetime.now().month, datetime.datetime.now().day, datetime.datetime.now().year) in file_list[-1] and '{}.tar.gz'.format(user) in file_list[-1]:
+            if 'backup-' in file_list[-1] and '{}.tar.gz'.format(user) in file_list[-1]:
                 check_inprog_bk = opener.open("https://{}{}/frontend/paper_lantern/backup/wizard-fullbackup.html".format(self.hostname_port, session_id))
 
                 # make sure it's not still generating!
@@ -116,6 +121,9 @@ class Reseller:
                 # and finally download the backup!
                 with open("{}{}".format(self.working_directory, file_list[-1]), 'wb') as output:
                     output.write(download_backup.read())
+            else:
+                print("There was an issue with the name of the backup file. I suggest a manual migration from here bud")
+                sys.exit(1)
 
             # add the backup file to the list of total backup files
             self.backup_files.append("{}{}".format(self.working_directory, backup['file']))
