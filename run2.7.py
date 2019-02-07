@@ -19,6 +19,7 @@
 # along with Reseller Automated Migration Tool.  If not, see <http://www.gnu.org/licenses/>.
 
 import json, time, os, random, getpass, urllib, urllib2, datetime, sys, cookielib
+from os.path import expanduser
 
 class Reseller:
     def __init__(self, hostname, username, password, ticket_id):
@@ -29,13 +30,13 @@ class Reseller:
         self.ticket_id = ticket_id
 
         # get environment stuff to save time
-        self.env_user = os.environ['USER']
+        self.home = expanduser("~")
 
         # setup working directory for backup locations
-        if not os.path.exists("/home/{}/automigrations/".format(self.env_user)):
-            os.mkdir("/home/{}/automigrations/".format(self.env_user))
+        if not os.path.exists("{}/automigrations/".format(self.home)):
+            os.mkdir("{}/automigrations/".format(self.home))
 
-        self.working_directory = '/home/{}/automigrations/{}/'.format(self.env_user, self.ticket_id)
+        self.working_directory = '{}/automigrations/{}/'.format(self.home, self.ticket_id)
         if not os.path.exists(self.working_directory):
             os.mkdir(self.working_directory)
 
@@ -50,6 +51,9 @@ class Reseller:
         self.opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(self.cj))
         self.data = urllib.urlencode(self.login_data)
 
+        # create array for backup files
+        self.backup_files = []
+
         # grab cpanel session id and then grab account list
         try:
             self.session_id = self.get_session()
@@ -59,11 +63,6 @@ class Reseller:
             print "Invalid hostname or login credential"
             sys.exit(1)
 
-        # create array for backup files
-        self.backup_files = []
-
-        # generate and download each backup
-        self.get_backups()
 
     # easier way to get the url n junk
     def get_url(self, url):
@@ -156,6 +155,8 @@ if __name__ == "__main__":
     print "#    Facts gathered during retrieval     #"
     print "##########################################"
     reseller = Reseller(hostname, username, password, ticket_id)
+
+    reseller.get_backups()
 
      #output each backup location for easy copy/paste for re-importing
     print "##########################################"
