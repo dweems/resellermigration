@@ -18,9 +18,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Reseller Automated Migration Tool.  If not, see <http://www.gnu.org/licenses/>.
 
-import json, time, os, random, getpass, urllib.parse, urllib.request, datetime, sys
-import http.cookiejar as cookielib
-from pathlib import Path
+import json, time, os, random, getpass, urllib, urllib2, datetime, sys, cookielib, ssl
+from os.path import expanduser
 
 class Reseller:
     def __init__(self, hostname, username, password, ticket_id):
@@ -31,7 +30,7 @@ class Reseller:
         self.ticket_id = ticket_id
 
         # get environment stuff to save time
-        self.home = str(Path.home())
+        self.home = expanduser("~")
 
         # setup working directory for backup locations
         if not os.path.exists("{}/automigrations/".format(self.home)):
@@ -47,22 +46,29 @@ class Reseller:
             'pass': self.password,
             }
 
+        # make sure we ignore invalid SSL certs
+        self.ctx = ssl.create_default_context()
+        self.ctx.check_hostname = False
+        self.ctx.verify_mode = ssl.CERT_NONE
+
         # initialize cookielib
         self.cj = cookielib.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj))
-        self.data = urllib.parse.urlencode(self.login_data)
+
+        # initialize our opener with our SSL ignore and cookie processor 
+        self.opener = urllib2.build_opener(urllib2.HTTPSHandler(context=self.ctx), urllib2.HTTPCookieProcessor(self.cj))
+        self.data = urllib.urlencode(self.login_data)
+
+        # create array for backup files
+        self.backup_files = []
 
         # grab cpanel session id and then grab account list
         try:
             self.session_id = self.get_session()
             self.accounts = self.get_accounts()
             
-        except urllib.error.URLError:
-            print("Invalid hostname or login credential")
+        except urllib2.URLError:
+            print "Invalid hostname or login credential"
             sys.exit(1)
-
-        # create array for backup files
-        self.backup_files = []
 
     # easier way to get the url n junk
     def get_url(self, url):
@@ -87,9 +93,10 @@ class Reseller:
         # iterate over each user, generate a backup, wait for it to complete, and download it
         for user in self.accounts:
             cj = cookielib.CookieJar()
-            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-            login_data = urllib.parse.urlencode({'user' : user, 'pass' : self.password})
+            opener = urllib2.build_opener(urllib2.HTTPSHandler(context=self.ctx), urllib2.HTTPCookieProcessor(cj))
+            login_data = urllib.urlencode({'user' : user, 'pass' : self.password})
             resp = opener.open('https://{}/login/?login_only=1'.format(self.hostname_port), login_data.encode('utf-8'))
+            
             session_id = json.loads(resp.read().decode('utf-8'))['security_token']
 
             # generate the backup
@@ -120,7 +127,7 @@ class Reseller:
                 with open("{}{}".format(self.working_directory, file_list[-1]), 'wb') as output:
                     output.write(download_backup.read())
             else:
-                print("There was an issue with the name of the backup file. I suggest a manual migration from here bud")
+                print "There was an issue with the name of the backup file. I suggest a manual migration from here bud"
                 sys.exit(1)
 
             # add the backup file to the list of total backup files
@@ -140,29 +147,27 @@ class Reseller:
                 "inode_usage": inode_usage,
             }
 
-            print(facts)
+            print facts
 
 if __name__ == "__main__":
     # gather reseller information
-    hostname = input("Please provide the reseller server's hostname or IP: ")
-    username = input("Please provide the reseller username: ")
+    hostname = raw_input("Please provide the reseller server's hostname or IP: ")
+    username = raw_input("Please provide the reseller username: ")
     password = getpass.getpass("Please provide the reseller server's password: ")
-    ticket_id = input("Please provide the ticket number: ")
+    ticket_id = raw_input("Please provide the ticket number: ")
 
     #begin
-    print("\nGenerating server backups..")
-    print("##########################################")
-    print("#    Facts gathered during retrieval     #")
-    print("##########################################")
+    print "\nGenerating server backups.."
+    print "##########################################"
+    print "#    Facts gathered during retrieval     #"
+    print "##########################################"
     reseller = Reseller(hostname, username, password, ticket_id)
 
-
-    # generate and download each backup
     reseller.get_backups()
 
      #output each backup location for easy copy/paste for re-importing
-    print("##########################################")
-    print("# path to each backup file for importing #")
+    print "##########################################"
+    print "# path to each backup file for importing #"
     for file in reseller.backup_files:
-        print(file)
-    print("##########################################")
+        print file
+    print "##########################################"
